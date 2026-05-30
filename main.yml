@@ -1,0 +1,31 @@
+name: WhatsApp Product Poster
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */4 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.x
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests beautifulsoup4
+    - name: Run the bot
+      env:
+        GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+        GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
+      run: python script.py
+    - name: Upload posted_deals.json
+      uses: actions/upload-artifact@v4
+      with:
+        name: posted-deals
+        path: posted_deals.json
+        if-no-files-found: ignore # Don't fail if the file doesn't exist yet
