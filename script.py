@@ -62,7 +62,6 @@ def extract_desidime_product_url(deal_page_url):
             return None
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Direct links check
         for link in soup.find_all('a', href=True):
             href = link.get('href')
             if href and any(site in href for site in ['amazon.in', 'flipkart.com', 'myntra.com', 'ajio.com']):
@@ -81,12 +80,14 @@ def get_amazon_rss_deals():
     try:
         response = requests.get(AMAZON_DEALS_RSS, headers=headers, timeout=15)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'xml')
+            # Sahi Parser ('html.parser') use kiya hai taaki extra library ka error na aaye
+            soup = BeautifulSoup(response.text, 'html.parser')
             items = soup.find_all('item')
             for item in items:
                 title = item.find('title').text if item.find('title') else 'Amazon Hot Deal'
                 link = item.find('link').text if item.find('link') else ''
                 if link:
+                    # Link ko clean karna
                     clean_link = link.split('?')[0].split('&')[0]
                     deals.append({"title": title, "url": clean_link, "source": "Amazon_RSS"})
     except Exception as e:
@@ -114,7 +115,6 @@ def main():
     posted_deals = load_posted_deals()
     posted_count = 0
     
-    # STEP 1: Pehle DesiDime se try karein
     print("--- FIRST PRIORITY: Fetching from DesiDime ---")
     dd_deals = get_desidime_deals()
     print(f"Found {len(dd_deals)} raw pages on DesiDime.")
@@ -134,7 +134,6 @@ def main():
                 posted_count += 1
                 time.sleep(5)
 
-    # STEP 2: Agar DesiDime ne kaam nahi kiya ya kam deals mili, toh Amazon RSS se backup lein
     if posted_count < 2:
         print("\n--- SECOND PRIORITY (FALLBACK): Fetching from Amazon Official RSS ---")
         amz_deals = get_amazon_rss_deals()
