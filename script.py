@@ -4,19 +4,14 @@ import os
 import json
 import time
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (Sahi Green-API URL Ke Sath) ---
 AMAZON_LIVE_DEALS_URL = "https://rss.app" 
 AMAZON_AFFILIATE_TAG = "sk200709-21"
 
-# Secrets ko bina kisi extra star (*) ya symbol ke clean karne ka setup
-INSTANCE_RAW = str(os.environ.get("GREEN_API_INSTANCE_ID", "7107592101"))
-TOKEN_RAW = str(os.environ.get("GREEN_API_TOKEN", "269f8275111a41439ffebad121b742835c6027d6c6cb40678d"))
-
-# Link ko poori tarah saaf karna taaki koi *** network error na aaye
-GREEN_API_INSTANCE_ID = INSTANCE_RAW.replace('*', '').replace(' ', '').strip()
-GREEN_API_TOKEN = TOKEN_RAW.replace('*', '').replace(' ', '').strip()
-
+GREEN_API_INSTANCE_ID = "7107592101"
+GREEN_API_TOKEN = "269f8275111a41439ffebad121b742835c6027d6c6cb40678d"
 WHATSAPP_CHANNEL_JID = "120363294334346747@newsletter"
+
 POSTED_DEALS_FILE = "posted_deals.json"
 
 def load_posted_deals():
@@ -37,7 +32,6 @@ def get_live_deals():
     deals_list = []
     
     try:
-        print("Live Amazon India Data Stream ko scan kar rahe hain...")
         res = requests.get(AMAZON_LIVE_DEALS_URL, headers=headers, timeout=15)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
@@ -49,7 +43,7 @@ def get_live_deals():
                 if link_tag and not link:
                     link = link_tag.get('href', '')
                 if title and link:
-                    clean_link = link.split('?').split('&')
+                    clean_link = link.split('?')[0].split('&')[0]
                     deals_list.append({"title": title, "url": clean_link})
     except:
         pass
@@ -73,14 +67,13 @@ def get_live_deals():
     return deals_list
 
 def send_whatsapp(chat_id, msg):
-    # Fixed Base URL jisme koi GitHub Secret error nahi aa sakta
-    clean_url = f"https://green-api.com{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}"
-    
+    # Aapke account ka asli aur sahi URL yahan set kar diya hai
+    url = f"https://7107.api.greenapi.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}"
     try:
-        res = requests.post(clean_url, headers={"Content-Type": "application/json"}, data=json.dumps({"chatId": chat_id, "message": msg}), timeout=12)
+        res = requests.post(url, headers={"Content-Type": "application/json"}, data=json.dumps({"chatId": chat_id, "message": msg}), timeout=12)
         print(f"WhatsApp Engine Response: {res.text}")
     except Exception as e:
-        print(f"WhatsApp Network Error: {e}")
+        print(f"WhatsApp Connection Error: {e}")
 
 def main():
     posted_deals = load_posted_deals()
@@ -96,7 +89,7 @@ def main():
         product_title = item["title"]
         
         if target_url not in posted_deals:
-            print(f"\nProcessing active live link: {product_title}")
+            print(f"Posting Deal: {product_title}")
             
             if 'amazon.in' in target_url or 'desidime' not in target_url:
                 final_link = f"{target_url}?tag={AMAZON_AFFILIATE_TAG}" if "?" not in target_url else f"{target_url}&tag={AMAZON_AFFILIATE_TAG}"
