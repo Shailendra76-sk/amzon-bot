@@ -16,7 +16,7 @@ GREEN_API_TOKEN        = os.environ.get("GREEN_API_TOKEN", "")
 # Instance-specific server (7107 = tumhara server)
 GREEN_API_BASE_URL     = "https://7107.api.greenapi.com"
 
-WHATSAPP_CHANNEL_JID   = "0029VbCy92nBadmau8nw0v3j@newsletter"
+WHATSAPP_CHANNEL_JID   = "120363424914979115@g.us"
 
 POSTED_DEALS_FILE      = "posted_deals.json"
 
