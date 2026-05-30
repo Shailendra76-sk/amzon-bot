@@ -4,16 +4,15 @@ import os
 import json
 import time
 
-# --- CONFIGURATION (Sahi Group Link Ke Sath) ---
+# --- CONFIGURATION ---
 AMAZON_LIVE_DEALS_URL = "https://rss.app" 
 AMAZON_AFFILIATE_TAG = "sk200709-21"
 
+# GitHub Secrets se clean tarike se token uthana
 GREEN_API_INSTANCE_ID = "7107592101"
-GREEN_API_TOKEN = "269f8275111a41439ffebad121b742835c6027d6c6cb40678d"
+GREEN_API_TOKEN = os.environ.get("GREEN_API_TOKEN")
 
-# Aapka bheja hua asli real WhatsApp group link
 GROUP_INVITE_LINK = "https://chat.whatsapp.com/BBP6AltCSKk6tTZ8iFuywz"
-
 POSTED_DEALS_FILE = "posted_deals.json"
 
 def load_posted_deals():
@@ -32,7 +31,6 @@ def get_live_deals():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     deals_list = []
-    
     try:
         res = requests.get(AMAZON_LIVE_DEALS_URL, headers=headers, timeout=15)
         if res.status_code == 200:
@@ -45,7 +43,7 @@ def get_live_deals():
                 if link_tag and not link:
                     link = link_tag.get('href', '')
                 if title and link:
-                    clean_link = link.split('?').split('&')
+                    clean_link = link.split('?') if '?' in link else link
                     deals_list.append({"title": title, "url": clean_link})
     except:
         pass
@@ -64,20 +62,24 @@ def get_live_deals():
                         deals_list.append({"title": title, "url": full_url})
         except:
             pass
-
     return deals_list
 
 def send_whatsapp_by_link(invite_link, msg):
-    # Green-API ka official method direct group link par message bhejne ke liye
-    url = f"https://greenapi.com{GREEN_API_INSTANCE_ID}/sendMessageByLink/{GREEN_API_TOKEN}"
+    if not GREEN_API_TOKEN:
+        print("Error: GREEN_API_TOKEN environment variable khali hai.")
+        return
+
+    # Base URL ko safe format mein banana
+    base_url = f"https://greenapi.com{GREEN_API_INSTANCE_ID}/sendMessageByLink/{GREEN_API_TOKEN.strip()}"
+    
     headers = {"Content-Type": "application/json"}
     payload = {
         "inviteLink": invite_link,
         "message": msg
     }
     try:
-        res = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
-        print(f"Direct Group Link Server Response: {res.text}")
+        res = requests.post(base_url, headers=headers, data=json.dumps(payload), timeout=15)
+        print(f"Direct Group Server Response: {res.text}")
     except Exception as e:
         print(f"WhatsApp Connection Error: {e}")
 
@@ -108,7 +110,6 @@ def main():
                 f"👉 *Buy Now:* {final_link}"
             )
             
-            # Direct link function call kiya hai
             send_whatsapp_by_link(GROUP_INVITE_LINK, message)
             posted_deals.append(target_url)
             save_posted_deals(posted_deals)
