@@ -17,10 +17,16 @@ GREEN_API_INSTANCE_ID   = os.environ.get("GREEN_API_INSTANCE_ID", "7107592101")
 GREEN_API_TOKEN         = os.environ.get("GREEN_API_TOKEN", "")
 GREEN_API_BASE_URL      = "https://7107.api.greenapi.com"
 
-WHATSAPP_CHANNEL_JID    = "120363424914979115@g.us"  # Tumhara group JID
+WHATSAPP_CHANNEL_JID    = "120363424914979115@g.us"
 
 POSTED_DEALS_FILE       = "posted_deals.json"
 MIN_HOTNESS             = 50
+
+# Sirf in stores ki deals post karo (affiliate milta hai)
+AFFILIATE_STORES = [
+    "amazon", "flipkart", "myntra", "ajio",
+    "meesho", "nykaa", "tatacliq", "snapdeal"
+]
 
 HEADERS = {
     "User-Agent": (
@@ -86,20 +92,11 @@ def get_deals_from_new_page() -> list:
             if raw.isdigit():
                 hotness = int(raw)
 
-        # Buy Now URL
-        visit_url = None
-        buy_now = article.find("a", class_=re.compile(r"gtm_buy_now_homepage"), href=True)
-        if buy_now:
-            href = buy_now["href"]
-            if href.startswith("http"):
-                visit_url = href
-
         if title and desidime_url:
             deals.append({
                 "id":           deal_id,
                 "title":        title,
                 "desidime_url": desidime_url,
-                "visit_url":    visit_url,
                 "hotness":      hotness,
                 "store":        store,
             })
@@ -108,131 +105,91 @@ def get_deals_from_new_page() -> list:
     return deals
 
 # ─────────────────────────────────────────────
-# Step-2: Product URL resolve karo
+# Step-2: Affiliaters API se affiliate link banao
+# DesiDime link seedha do — API khud product
+# dhundh ke affiliate link bana deta hai
 # ─────────────────────────────────────────────
-def resolve_product_url(deal: dict) -> str | None:
-    visit_url = deal.get("visit_url")
+def make_affiliate_link(deal: dict) -> str:
+    title        = deal["title"]
+    desidime_url = deal["desidime_url"]
+    store        = deal["store"].lower()
 
-    # Method 1: visit.desidime.com redirect follow karo
-    if visit_url and "visit.desidime.com" in visit_url:
-        try:
-            r = requests.get(visit_url, headers=HEADERS, allow_redirects=True, timeout=15)
-            final_url = r.url
-            if final_url and "desidime.com" not in final_url and final_url != visit_url:
-                print(f"[INFO] Redirect -> {final_url[:80]}")
-                return final_url
-        except requests.RequestException as e:
-            print(f"[WARN] Redirect failed: {e}")
-
-    # Method 2: deal page scrape karo
-    desidime_url = deal.get("desidime_url")
-    if not desidime_url:
-        return None
-
-    try:
-        r = requests.get(desidime_url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[WARN] Deal page fetch failed: {e}")
-        return None
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    ECOM_DOMAINS = [
-        "amazon.in", "amazon.com", "flipkart.com", "myntra.com",
-        "ajio.com", "tatacliq.com", "nykaa.com", "meesho.com",
-        "swiggy.com", "zomato.com", "bigbasket.com", "zepto.com",
-        "jiomart.com",
-    ]
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if any(d in href for d in ECOM_DOMAINS):
-            return href
-
-    return None
-
-# ─────────────────────────────────────────────
-# Step-3: Affiliaters API se affiliate link banao
-# ─────────────────────────────────────────────
-def make_affiliate_link(product_url: str, deal_title: str) -> str:
-    """
-    Amazon  → seedha Amazon tag lagao (fast)
-    Baaki   → Affiliaters API se convert karo (Earnkaro commission)
-    """
-
-    # Amazon ke liye seedha tag lagao
-    if "amazon." in product_url:
-        clean = re.sub(r"[?&]tag=[^&]*", "", product_url)
-        sep   = "&" if "?" in clean else "?"
-        final = f"{clean}{sep}tag={AMAZON_AFFILIATE_TAG}"
-        print(f"[AFFILIATE] Amazon tag laga ✅")
-        return final
-
-    # Baaki stores ke liye Affiliaters API
+    # Amazon ke liye Affiliaters API + Amazon tag
+    # Baaki ke liye sirf Affiliaters API
     if not AFFILIATERS_API_KEY:
-        print("[WARN] AFFILIATERS_API_KEY missing — original URL use ho raha hai")
-        return product_url
+        print("[WARN] AFFILIATERS_API_KEY missing")
+        return desidime_url
 
     try:
-        # Deal title + URL bhejo — better conversion
         payload = {
-            "deal": f"{deal_title}\n{product_url}",
+            "deal": f"{title}\n{desidime_url}",
             "convert_option": "convert_only"
         }
         r = requests.post(
             AFFILIATERS_API_URL,
             headers={
                 "Authorization": f"Bearer {AFFILIATERS_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type":  "application/json"
             },
             json=payload,
-            timeout=15
+            timeout=20
         )
         data = r.json()
 
         if data.get("success") == 1:
-            converted = data.get("data", "")
-            # Converted text mein se link nikalo
-            urls = re.findall(r'https?://\S+', converted)
-            if urls:
-                # Affiliate link wala (fktr.in, myntr.it etc)
-                for u in urls:
-                    if any(x in u for x in ["fktr.in", "myntr.it", "ekaro", "amzn"]):
-                        print(f"[AFFILIATE] Earnkaro link bana ✅ -> {u[:60]}")
-                        return u
-                # Koi bhi pehla link le lo
-                print(f"[AFFILIATE] Link converted ✅ -> {urls[0][:60]}")
-                return urls[0]
+            converted_text = data.get("data", "")
+            # Converted text mein se affiliate link nikalo
+            urls = re.findall(r'https?://\S+', converted_text)
+            affiliate_urls = []
+            for u in urls:
+                # Desidime links ignore karo
+                if "desidime" not in u:
+                    affiliate_urls.append(u)
+
+            if affiliate_urls:
+                # Amazon link pe apna tag bhi lagao
+                for u in affiliate_urls:
+                    if "amazon." in u:
+                        clean = re.sub(r"[?&]tag=[^&]*", "", u)
+                        sep   = "&" if "?" in clean else "?"
+                        final = f"{clean}{sep}tag={AMAZON_AFFILIATE_TAG}"
+                        print(f"[AFFILIATE] Amazon ✅ -> {final[:70]}")
+                        return final
+                # Baaki (flipkart, myntra etc)
+                print(f"[AFFILIATE] Earnkaro ✅ -> {affiliate_urls[0][:70]}")
+                return affiliate_urls[0]
+            else:
+                print(f"[WARN] Koi affiliate link nahi mila — DesiDime link use hoga")
+                return desidime_url
         else:
-            print(f"[WARN] Affiliaters API error: {data.get('message', 'unknown')}")
+            msg = data.get("message", "unknown error")
+            print(f"[WARN] Affiliaters API: {msg}")
+            return desidime_url
 
     except Exception as e:
-        print(f"[WARN] Affiliaters API call failed: {e}")
-
-    # Fallback — original URL
-    return product_url
+        print(f"[WARN] Affiliaters API failed: {e}")
+        return desidime_url
 
 # ─────────────────────────────────────────────
-# Step-4: WhatsApp message banao
+# Step-3: WhatsApp message banao
 # ─────────────────────────────────────────────
-def build_message(deal: dict, product_url: str) -> str:
+def build_message(deal: dict, affiliate_link: str) -> str:
     title    = deal["title"]
     store    = deal["store"] or "Online"
     hotness  = deal["hotness"]
     dime_url = deal["desidime_url"]
-
-    hotness_str  = f"{hotness}°" if hotness > 0 else "New"
-    affiliate_url = make_affiliate_link(product_url, title) if product_url else dime_url
+    hotness_str = f"{hotness}°" if hotness > 0 else "New"
 
     return (
         f"🔥 *{hotness_str} Hot Deal!*\n\n"
         f"📦 *{title}*\n"
         f"🏪 Store: {store}\n\n"
-        f"👉 *Buy Now:* {affiliate_url}\n\n"
+        f"👉 *Buy Now:* {affiliate_link}\n\n"
         f"🔗 _Details: {dime_url}_"
     )
 
 # ─────────────────────────────────────────────
-# Step-5: WhatsApp pe bhejo
+# Step-4: WhatsApp pe bhejo
 # ─────────────────────────────────────────────
 def send_whatsapp_message(chat_id: str, text: str) -> bool:
     if not GREEN_API_TOKEN:
@@ -272,21 +229,26 @@ def main():
     for deal in deals:
         deal_id = deal["id"]
 
+        # Already posted skip
         if deal_id in posted_deals:
             continue
 
+        # Low hotness skip
         if deal["hotness"] < MIN_HOTNESS and deal["hotness"] != 0:
-            print(f"[SKIP] Low hotness ({deal['hotness']}): {deal['title'][:60]}")
+            print(f"[SKIP] Low hotness ({deal['hotness']}): {deal['title'][:55]}")
+            continue
+
+        # Non-affiliate store skip
+        store_lower = deal["store"].lower()
+        if not any(s in store_lower for s in AFFILIATE_STORES):
+            print(f"[SKIP] No affiliate: {deal['store']} | {deal['title'][:45]}")
             continue
 
         print(f"\n[DEAL] {deal['title'][:70]}")
         print(f"       Hotness={deal['hotness']}  Store={deal['store']}")
 
-        product_url = resolve_product_url(deal)
-        if not product_url:
-            print("[WARN] Product URL nahi mila — DesiDime link use hoga")
-
-        message = build_message(deal, product_url)
+        affiliate_link = make_affiliate_link(deal)
+        message        = build_message(deal, affiliate_link)
         send_whatsapp_message(WHATSAPP_CHANNEL_JID, message)
 
         posted_deals.append(deal_id)
