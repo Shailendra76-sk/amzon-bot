@@ -8,24 +8,26 @@ import re
 # ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────
-DESIDIME_NEW_DEALS_URL = "https://www.desidime.com/new"
-AMAZON_AFFILIATE_TAG   = "sk200709-21"
+AMAZON_AFFILIATE_TAG  = "sk200709-21"
 
-GREEN_API_INSTANCE_ID  = os.environ.get("GREEN_API_INSTANCE_ID", "7107592101")
-GREEN_API_TOKEN        = os.environ.get("GREEN_API_TOKEN", "")
-GREEN_API_BASE_URL     = "https://7107.api.greenapi.com"
+GREEN_API_INSTANCE_ID = os.environ.get("GREEN_API_INSTANCE_ID", "7107592101")
+GREEN_API_TOKEN       = os.environ.get("GREEN_API_TOKEN", "")
+GREEN_API_BASE_URL    = "https://7107.api.greenapi.com"
 
-WHATSAPP_CHANNEL_JID   = "120363424914979115@g.us"
+WHATSAPP_CHANNEL_JID  = "120363424914979115@g.us"
 
-POSTED_DEALS_FILE      = "posted_deals.json"
-MIN_HOTNESS            = 50
+POSTED_DEALS_FILE     = "posted_deals.json"
+MIN_DISCOUNT          = 50   # Minimum discount % (50% se kam skip)
+MAX_DEALS_PER_RUN     = 5    # Ek baar mein max 5 deals post karo
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept-Language": "en-IN,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 # ─────────────────────────────────────────────
@@ -45,135 +47,198 @@ def save_posted_deals(deals: list):
         json.dump(deals, f, indent=2)
 
 # ─────────────────────────────────────────────
-# Step-1: DesiDime /new se deals scrape karo
+# Step-1: Amazon.in/deals se deals scrape karo
 # ─────────────────────────────────────────────
-def get_deals_from_new_page() -> list:
-    try:
-        resp = requests.get(DESIDIME_NEW_DEALS_URL, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] Could not fetch /new page: {e}")
-        return []
+def get_amazon_deals() -> list:
+    urls_to_try = [
+        "https://www.amazon.in/deals",
+        "https://www.amazon.in/gp/goldbox",
+    ]
 
-    soup  = BeautifulSoup(resp.text, "html.parser")
     deals = []
 
-    for article in soup.find_all("article", attrs={"data-gtm-deal-id": True}):
-        deal_id = article["data-gtm-deal-id"].strip()
-        store   = article.get("data-gtm-store", "").strip()
-
-        title_div = article.find("div", class_="custom-card-title")
-        if not title_div:
-            continue
-        link_tag = title_div.find("a", href=True)
-        if not link_tag:
+    for url in urls_to_try:
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            print(f"[WARN] Could not fetch {url}: {e}")
             continue
 
-        title        = link_tag.get_text(strip=True)
-        deal_rel_url = link_tag["href"]
-        desidime_url = (
-            "https://www.desidime.com" + deal_rel_url
-            if deal_rel_url.startswith("/") else deal_rel_url
-        )
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Hotness score
-        hotness = 0
-        hotness_span = article.find("span", class_=re.compile(r"hotness_value_" + deal_id))
-        if hotness_span:
-            raw = hotness_span.get_text(strip=True).replace("°", "")
-            if raw.isdigit():
-                hotness = int(raw)
+        # Amazon deals page structure
+        # Deal cards mein data-csa-c-item-id ya data-deal-id hota hai
+        deal_cards = soup.find_all("div", attrs={"data-csa-c-item-id": True})
 
-        # Buy Now URL
-        visit_url = None
-        buy_now = article.find("a", class_=re.compile(r"gtm_buy_now_homepage"), href=True)
-        if buy_now:
-            href = buy_now["href"]
-            if href.startswith("http"):
-                visit_url = href
+        if not deal_cards:
+            # Try alternative selectors
+            deal_cards = soup.find_all("div", attrs={"data-deal-id": True})
 
-        if title and desidime_url:
-            deals.append({
-                "id":           deal_id,
-                "title":        title,
-                "desidime_url": desidime_url,
-                "visit_url":    visit_url,
-                "hotness":      hotness,
-                "store":        store,
-            })
+        if not deal_cards:
+            # Try deal tiles
+            deal_cards = soup.select("div[class*='DealCard']")
 
-    print(f"[INFO] Scraped {len(deals)} deal cards from /new")
+        print(f"[INFO] Found {len(deal_cards)} deal cards on {url}")
+
+        for card in deal_cards:
+            try:
+                # Deal ID
+                deal_id = (
+                    card.get("data-csa-c-item-id") or
+                    card.get("data-deal-id") or
+                    ""
+                ).strip()
+
+                # Title
+                title_tag = (
+                    card.find("span", attrs={"data-csa-c-content-id": True}) or
+                    card.find("span", class_=re.compile(r"title|Title|name")) or
+                    card.find("div", class_=re.compile(r"title|Title"))
+                )
+                title = title_tag.get_text(strip=True) if title_tag else ""
+
+                # Price
+                price_tag = card.find("span", class_=re.compile(r"price|Price"))
+                price = price_tag.get_text(strip=True) if price_tag else ""
+
+                # Discount %
+                discount_tag = card.find("span", class_=re.compile(r"discount|Discount|percent|badge"))
+                discount_text = discount_tag.get_text(strip=True) if discount_tag else ""
+                discount_num = 0
+                disc_match = re.search(r"(\d+)%", discount_text)
+                if disc_match:
+                    discount_num = int(disc_match.group(1))
+
+                # Product link
+                link_tag = card.find("a", href=True)
+                product_url = ""
+                if link_tag:
+                    href = link_tag["href"]
+                    if href.startswith("/"):
+                        product_url = "https://www.amazon.in" + href
+                    elif href.startswith("http"):
+                        product_url = href
+
+                # ASIN nikalo URL se
+                asin_match = re.search(r"/dp/([A-Z0-9]{10})", product_url)
+                asin = asin_match.group(1) if asin_match else deal_id
+
+                if title and product_url and asin:
+                    deals.append({
+                        "id":       asin,
+                        "title":    title,
+                        "price":    price,
+                        "discount": discount_num,
+                        "url":      product_url,
+                    })
+
+            except Exception as e:
+                continue
+
+        if deals:
+            break  # Pehli working URL se deals mil gayi
+
+    # Fallback — Amazon Today's Deals RSS
+    if not deals:
+        print("[INFO] Trying Amazon RSS feed...")
+        deals = get_amazon_rss_deals()
+
+    print(f"[INFO] Total {len(deals)} Amazon deals scraped")
     return deals
 
 # ─────────────────────────────────────────────
-# Step-2: Amazon product URL resolve karo
+# Fallback: Amazon RSS feed
 # ─────────────────────────────────────────────
-def resolve_amazon_url(deal: dict) -> str | None:
-    visit_url = deal.get("visit_url")
+def get_amazon_rss_deals() -> list:
+    import xml.etree.ElementTree as ET
 
-    # Method 1: visit.desidime.com redirect follow karo
-    if visit_url and "visit.desidime.com" in visit_url:
+    rss_urls = [
+        "https://www.amazon.in/rss/bestsellers/electronics/",
+        "https://www.amazon.in/rss/bestsellers/apparel/",
+        "https://www.amazon.in/rss/bestsellers/kitchen/",
+        "https://www.amazon.in/rss/bestsellers/sports/",
+        "https://www.amazon.in/rss/movers-and-shakers/electronics/",
+    ]
+
+    deals = []
+    for rss_url in rss_urls:
         try:
-            r = requests.get(
-                visit_url, headers=HEADERS,
-                allow_redirects=True, timeout=15
-            )
-            final_url = r.url
-            if final_url and "amazon." in final_url:
-                print(f"[INFO] Amazon URL mila -> {final_url[:80]}")
-                return final_url
-        except requests.RequestException as e:
-            print(f"[WARN] Redirect failed: {e}")
+            r = requests.get(rss_url, headers=HEADERS, timeout=15)
+            if r.status_code != 200:
+                continue
 
-    # Method 2: deal page scrape karo
-    desidime_url = deal.get("desidime_url")
-    if not desidime_url:
-        return None
+            root = ET.fromstring(r.content)
+            ns   = {"media": "http://search.yahoo.com/mrss/"}
 
-    try:
-        r = requests.get(desidime_url, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[WARN] Deal page fetch failed: {e}")
-        return None
+            for item in root.findall(".//item"):
+                title_el = item.find("title")
+                link_el  = item.find("link")
+                title    = title_el.text.strip() if title_el is not None else ""
+                link     = link_el.text.strip()  if link_el  is not None else ""
 
-    soup = BeautifulSoup(r.text, "html.parser")
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "amazon." in href:
-            print(f"[INFO] Amazon URL scraped -> {href[:80]}")
-            return href
+                if not link:
+                    continue
 
-    return None
+                # Clean URL
+                clean_url = link.split("?")[0] if "?" in link else link
+
+                # ASIN
+                asin_match = re.search(r"/dp/([A-Z0-9]{10})", clean_url)
+                asin = asin_match.group(1) if asin_match else ""
+
+                if title and clean_url and asin:
+                    deals.append({
+                        "id":       asin,
+                        "title":    title,
+                        "price":    "",
+                        "discount": 0,
+                        "url":      clean_url,
+                    })
+
+            if deals:
+                print(f"[INFO] RSS deals from {rss_url}: {len(deals)}")
+                break
+
+        except Exception as e:
+            print(f"[WARN] RSS error: {e}")
+            continue
+
+    return deals
 
 # ─────────────────────────────────────────────
-# Step-3: Amazon affiliate tag lagao
+# Step-2: Affiliate tag lagao
 # ─────────────────────────────────────────────
-def make_amazon_affiliate(url: str) -> str:
+def make_affiliate_url(url: str) -> str:
     clean = re.sub(r"[?&]tag=[^&]*", "", url)
+    # Sirf ASIN wala clean URL rakho
+    asin_match = re.search(r"(/dp/[A-Z0-9]{10})", clean)
+    if asin_match:
+        clean = "https://www.amazon.in" + asin_match.group(1)
     sep   = "&" if "?" in clean else "?"
-    final = f"{clean}{sep}tag={AMAZON_AFFILIATE_TAG}"
-    print(f"[AFFILIATE] Tag laga -> {final[:80]}")
-    return final
+    return f"{clean}{sep}tag={AMAZON_AFFILIATE_TAG}"
 
 # ─────────────────────────────────────────────
-# Step-4: WhatsApp message banao
+# Step-3: WhatsApp message banao
 # ─────────────────────────────────────────────
-def build_message(deal: dict, buy_link: str) -> str:
-    title       = deal["title"]
-    hotness     = deal["hotness"]
-    dime_url    = deal["desidime_url"]
-    hotness_str = f"{hotness}°" if hotness > 0 else "🆕 New"
+def build_message(deal: dict, affiliate_url: str) -> str:
+    title    = deal["title"]
+    price    = deal["price"]
+    discount = deal["discount"]
+
+    disc_str  = f"🏷️ *{discount}% OFF*\n" if discount >= MIN_DISCOUNT else ""
+    price_str = f"💰 Price: *{price}*\n"   if price else ""
 
     return (
-        f"🔥 *{hotness_str} Amazon Deal!*\n\n"
+        f"🔥 *Amazon Hot Deal!*\n\n"
         f"📦 *{title}*\n\n"
-        f"👉 *Buy Now:* {buy_link}\n\n"
-        f"🔗 _Details: {dime_url}_"
+        f"{disc_str}"
+        f"{price_str}\n"
+        f"👉 *Buy Now:* {affiliate_url}"
     )
 
 # ─────────────────────────────────────────────
-# Step-5: WhatsApp pe bhejo
+# Step-4: WhatsApp pe bhejo
 # ─────────────────────────────────────────────
 def send_whatsapp_message(chat_id: str, text: str) -> bool:
     if not GREEN_API_TOKEN:
@@ -207,42 +272,25 @@ def send_whatsapp_message(chat_id: str, text: str) -> bool:
 # ─────────────────────────────────────────────
 def main():
     posted_deals = load_posted_deals()
-    deals        = get_deals_from_new_page()
+    deals        = get_amazon_deals()
 
     new_count = 0
     for deal in deals:
-        deal_id     = deal["id"]
-        store_lower = deal["store"].lower()
+        if new_count >= MAX_DEALS_PER_RUN:
+            break
+
+        deal_id = deal["id"]
 
         # Already posted skip
         if deal_id in posted_deals:
             continue
 
-        # Sirf Amazon deals
-        if "amazon" not in store_lower:
-            print(f"[SKIP] Non-Amazon ({deal['store']}): {deal['title'][:50]}")
-            continue
-
-        # Low hotness skip
-        if deal["hotness"] < MIN_HOTNESS and deal["hotness"] != 0:
-            print(f"[SKIP] Low hotness ({deal['hotness']}): {deal['title'][:50]}")
-            continue
-
         print(f"\n[DEAL] {deal['title'][:70]}")
-        print(f"       Hotness={deal['hotness']}  Store={deal['store']}")
+        print(f"       Discount={deal['discount']}%  Price={deal['price']}")
 
-        # Amazon URL nikalo
-        amazon_url = resolve_amazon_url(deal)
-
-        if not amazon_url:
-            print(f"[SKIP] Amazon URL nahi mila — skip kar rahe hain")
-            # Track karo taaki baar baar try na ho
-            posted_deals.append(deal_id)
-            save_posted_deals(posted_deals)
-            continue
-
-        # Affiliate tag lagao
-        affiliate_url = make_amazon_affiliate(amazon_url)
+        # Affiliate URL banao
+        affiliate_url = make_affiliate_url(deal["url"])
+        print(f"[AFFILIATE] {affiliate_url[:80]}")
 
         # Message banao aur bhejo
         message = build_message(deal, affiliate_url)
