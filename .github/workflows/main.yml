@@ -43,3 +43,46 @@ jobs:
           path: posted_deals.json
           retention-days: 30
           if-no-files-found: ignore
+name: Auto Post Amazon Deals
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'    # har 4 ghante mein
+  workflow_dispatch:          # manually bhi chala sakte ho
+
+jobs:
+  post-deals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 lxml
+
+      - name: Download previous posted_deals.json
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: posted-deals
+          path: .
+        continue-on-error: true
+
+      - name: Run script
+        env:
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          FB_PAGE_TOKEN:         ${{ secrets.FB_PAGE_TOKEN }}
+        run: python script.py
+
+      - name: Upload posted_deals.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: posted-deals
+          path: posted_deals.json
+          retention-days: 90
