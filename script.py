@@ -35,7 +35,7 @@ GREEN_API_TOKEN       = os.getenv("GREEN_API_TOKEN", "")
 WHATSAPP_CHAT_JID     = "120363424914979115@g.us"   # tumhara group JID
 
 # Facebook
-FB_PAGE_ID    = "615905325014230"   # Loot Bazaar India page
+FB_PAGE_ID    = "1205433809300407"   # Loot Bazaar India page
 FB_PAGE_TOKEN = os.getenv("FB_PAGE_TOKEN", "")
 
 HEADERS = {
